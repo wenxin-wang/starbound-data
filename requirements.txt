@@ -1,5 +1,15 @@
+aiohttp==1.2.0
 appdirs==1.4.0
+async-timeout==1.1.0
 beautifulsoup4==4.5.3
+chardet==2.3.0
+greenlet==0.4.12
+multidict==2.1.4
+mwclient==0.8.2
+oauthlib==2.0.1
 packaging==16.8
 pyparsing==2.1.10
+requests==2.13.0
+requests-oauthlib==0.7.0
 six==1.10.0
+yarl==0.8.1
