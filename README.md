@@ -14,7 +14,7 @@ The csv files are the resuling data, so you probably don't have to run the scrip
 
 Requirements:
 
-- Python 3.5
+- Python 3.6
 - aiohttp
 - BeautifulSoup4
 
