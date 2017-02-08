@@ -1,17 +1,22 @@
-import asyncio as aio
-import aiohttp
+import asyncio as aio, aiohttp
 import json
-import wiki
-import table
+
+import wiki, table
 
 
 async def main(loop):
     async with aiohttp.ClientSession(loop=loop,
                                      connector=aiohttp.TCPConnector(limit=20)) as session:
-        food = await wiki.get_items_all_categories(session, wiki.food_categories)
-    with open('food.json', 'w') as fd:
-        json.dump(food, fd)
-    table.components_csv('food.csv', food)
+        #print(await wiki._get_item(session,'/Heart_Wreath'))
+        tables = {
+            'food': aio.ensure_future(table.process_categories(session, wiki.food_categories)),
+            'crafts': aio.ensure_future(table.process_categories(session, wiki.crafts_categories)),
+        }
+        for n, t in tables.items():
+            simple, compound, components = await t
+            #with open(n + '.json', 'w') as fd:
+            #    json.dump({'simple': simple, 'compound': compound}, fd)
+            table.components_csv(n + '.csv', simple, compound, components)
 
 
 if __name__ == '__main__':

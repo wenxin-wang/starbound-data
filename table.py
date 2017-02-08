@@ -1,62 +1,84 @@
+import asyncio as aio
 from csv import DictWriter
-
+from collections import defaultdict
+import wiki
 
 SELL_RATIO = 0.4
 
 
-def _traverse(s, price, p, cur):
-    used_by = p.get('used_by')
-    if not used_by:
-        return
-    for it in used_by:
-        n = cur * it['ingredients'][p['url']]
-        it['components'][s] = n
-        if price:
-            it['ncomp'] += n
-            it['raw'] += n * price
-        _traverse(s, price, it, n)
+async def process_item(session, url):
+    item = await wiki.get_item(session, url)
+    if not item or 'components' in item:
+        return item
+
+    ingredients = item.get('ingredients')
+    if ingredients:
+        ingf = []
+        for u, n in ingredients.items():
+            f = process_item(session, u)
+            ingf.append((aio.ensure_future(f), n))
+        comps = defaultdict(int)
+        ncomp = 0
+        raw = 0
+        for f, n in ingf:
+            it = await f
+            for u, m in it['components'].items():
+                comps[u] += n * m
+        for u, n in comps.items():
+            p = (await wiki.get_item(session, u))['price']
+            ncomp += n
+            raw += n * p
+        item['components'] = comps
+        item['ncomp'] = ncomp
+        item['raw'] = raw
+    else:
+        item['components'] = {item['url']: 1}
+        item['ncomp'] = 1
+        item['raw'] = item['price']
+    return item
 
 
-def get_components(items):
+async def process_category(session, category):
+    pending = []
+    async for url in wiki.get_category_urls(session, category):
+        f = process_item(session, url)
+        pending.append(aio.ensure_future(f))
+    return pending
+
+
+async def process_categories(session, categories):
+    pending = []
+    for c in categories:
+        f = process_category(session, c)
+        pending.append(aio.ensure_future(f))
+    items = [await f for c in pending for f in await c if await f]
+    items.sort(key=lambda s: s['price'])
     simple = []
     compound = []
-    unknown = set()
-    for it in items.values():
-        ingredients = it.get('ingredients')
-        if not ingredients:
-            simple.append(it)
+    components = set()
+    for item in items:
+        components.update(item['components'])
+        if 'ingredients' in item:
+            compound.append(item)
         else:
-            it['components'] = {}
-            it['ncomp'] = 0
-            it['raw'] = 0
-            try:
-                for ing in ingredients.keys():
-                    items[ing]['used_by'].append(it)
-                compound.append(it)
-            except KeyError:
-                print('Unknown Ingredient %s for %s' % (ing, it['name']))
-                unknown.add(ing)
-    simple.sort(key=lambda s: s['price'])
-    for s in simple:
-        _traverse(s['name'], s['price'], s, 1)
-    return simple, compound
+            simple.append(item)
+    components = list(components)
+    components.sort()
+    return simple, compound, components
 
 
-def components_csv(name, items):
-    simple, compound = get_components(items)
+def components_csv(name, simple, compound, components):
     with open(name, 'w') as fd:
-        fieldnames = ['Item', 'Total', 'Raw', 'Unit'] + [s['name'] for s in simple]
+        fieldnames = ['Item', 'Total', 'Raw', 'Rise', 'Unit'] + components
         writer = DictWriter(fd, fieldnames=fieldnames)
         writer.writeheader()
-        for s in simple:
-            name = s['name']
-            price = s['price'] * SELL_RATIO
-            writer.writerow({'Item': name, 'Total': price, 'Unit': price,
-                             'Raw': price, name: 1})
-        for c in compound:
-            components = c.get('components')
-            price = c['price'] * SELL_RATIO
-            raw = c['raw'] * SELL_RATIO
-            unit = price / c['ncomp']
-            row = dict(Item=c['name'], Total=price, Unit=unit, Raw=raw, **components)
-            writer.writerow(row)
+        for items in [simple, compound]:
+            for it in items:
+                price = it['price'] * SELL_RATIO
+                raw = it['raw'] * SELL_RATIO
+                rise = '{:.2%}'.format(price / raw) if raw > 0 else 'x'
+                unit = price / it['ncomp']
+                components = it['components']
+                row = dict(Item=it['url'], Total=price, Raw=raw, Rise=rise,
+                           Unit=unit, **components)
+                writer.writerow(row)

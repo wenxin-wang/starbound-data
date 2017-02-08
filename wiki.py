@@ -16,15 +16,16 @@ food_categories = ['Food', 'Prepared_Food', 'Drink', 'Cooking Ingredient']
 crafts_categories = ['Crafting materials', 'Craftables']
 ignore_categories = ['Removed', 'Disabled']
 
+headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:51.0) Gecko/20100101 Firefox/51.0'}
+
 redirected = {}
-fitems = {}
+cache = {}
 
 
 def get_real_url(soup, u):
     _u = unquote(soup.find(id='ca-nstab-main').find('a')['href'])
-    if u != _u:
-        redirected[u] = _u
-        return _u
+    redirected[u] = _u
+    return _u
 
 
 def should_ignore(soup):
@@ -36,38 +37,39 @@ def should_ignore(soup):
 
 
 async def get_soup(session, url, parse_only=None):
-    async with session.get(URL(base + quote(url), encoded=True)) as res:
+    await aio.sleep(0.1)
+    async with session.get(URL(base + quote(url), encoded=True), headers=headers) as res:
         content = await res.text()
     return BeautifulSoup(content, 'html.parser',
                          parse_only=parse_only)
 
 
 async def url_soup(session, url, parse_only=None):
-    url = unquote(url)
     soup = await get_soup(session, url, parse_only)
     print("GET %s" % url)
-    return soup, get_real_url(soup, url) or url
+    return soup, get_real_url(soup, url)
 
 
-async def get_redirect(session, url):
-    url = unquote(url)
-    u = redirected.get(url)
-    if u:
-        return u
-    parse_only = SoupStrainer(id='ca-nstab-main')
-    soup = await get_soup(session, url, parse_only)
-    print("CHECK REDIRECT %s" % url)
-    return get_real_url(content, url)
+def get_price(infobox):
+    pixel_a = infobox.find('a', href='/File:Pixels-Sell.png')
+    if pixel_a:
+        return int(pixel_a.parent.get_text())
+    pixel_img = infobox.find('img', alt='Pixels-Sell.png')
+    if pixel_img:
+        return int(pixel_img.parent.get_text())
+    pixel_a = infobox.find('a', href='/Pixel')
+    return int(pixel_a.next_sibling.string)
 
 
-async def get_item(session, url):
+async def _get_item(session, url):
     soup, url = await url_soup(session, url)
     if should_ignore(soup):
-        return
-    item = {'name': url[1:], 'url': url, 'used_by': []}
-    pixel_a = soup.find('div', class_='infoboxwrapper').find('a', href='/Pixel')
-    item['price'] = int(pixel_a.next_sibling.string)
-    ing_text_div = soup.find('div', text='INGREDIENTS')
+        return None, url
+    item = {'name': url[1:], 'url': url}
+    pixel_a = None
+    infobox = soup.find('div', class_='infoboxwrapper')
+    item['price'] = get_price(infobox)
+    ing_text_div = infobox.find('div', text='INGREDIENTS')
     if ing_text_div:
         ingredients = {}
         for div in ing_text_div.next_siblings:
@@ -77,10 +79,32 @@ async def get_item(session, url):
             n = a.parent.next_sibling.div.string
             ingredients[a['href']] = int(n)
         item['ingredients'] = ingredients
-    return item
+    return item, url
 
 
-async def get_category_items(session, category, limit=50):
+async def get_item(session, url):
+    # Since async is single threaded,
+    # only await statements are interrupted
+    url = unquote(url)
+    url = redirected.get(url, url) # this could be redirected url
+    f = cache.get(url)
+    if not f:
+        f = aio.ensure_future(_get_item(session, url))
+        cache[url] = f
+    it, url = await f
+
+    _f = cache.get(url) # Direct entry
+    # If direct entry doesn't exist, use redirected.
+    # Redirected is never used when direct entry exists.
+    # Else cache[url] already points to the direct one
+    if not _f:
+        cache[url] = f # Direct url must haven't been queried yet
+    elif _f != f:
+        it, _ = await _f
+    return it
+
+
+async def get_category_urls(session, category, limit=50):
     params = {'action': 'query', 'list': 'categorymembers', 'continue': '',
               'format': 'json', 'cmprop': 'title', 'cmlimit': str(limit), 'cmtitle':
               'Category:' + category}
@@ -95,21 +119,6 @@ async def get_category_items(session, category, limit=50):
             if not cont:
                 break
             params['cmcontinue'] = cont['cmcontinue']
-
-
-async def get_items_in_category(session, category):
-    pending = []
-    async for url in get_category_items(session, category):
-        f = fitems.get(url)
-        if not f:
-            f = aio.ensure_future(get_item(session, url))
-        pending.append(f)
-    items = {}
-    for d in pending:
-        it = await d
-        if it:
-            items[it['url']] = it
-    return items
 
 
 async def get_items_all_categories(session, categories):
