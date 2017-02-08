@@ -13,9 +13,11 @@ crops_page = '/Crops'
 category = '/Category:'
 category_food = category + 'Food'
 food_categories = ['Food', 'Prepared_Food', 'Drink', 'Cooking Ingredient']
+crafts_categories = ['Crafting materials', 'Craftables']
 ignore_categories = ['Removed', 'Disabled']
 
 redirected = {}
+fitems = {}
 
 
 def get_real_url(soup, u):
@@ -62,7 +64,7 @@ async def get_item(session, url):
     soup, url = await url_soup(session, url)
     if should_ignore(soup):
         return
-    item = {'name': url[1:], 'url': url}
+    item = {'name': url[1:], 'url': url, 'used_by': []}
     pixel_a = soup.find('div', class_='infoboxwrapper').find('a', href='/Pixel')
     item['price'] = int(pixel_a.next_sibling.string)
     ing_text_div = soup.find('div', text='INGREDIENTS')
@@ -98,10 +100,12 @@ async def get_category_items(session, category, limit=50):
 async def get_items_in_category(session, category):
     pending = []
     async for url in get_category_items(session, category):
-        pending.append(aio.ensure_future(get_item(session, url)))
-    done, _ = await aio.wait(pending, loop=session.loop)
+        f = fitems.get(url)
+        if not f:
+            f = aio.ensure_future(get_item(session, url))
+        pending.append(f)
     items = {}
-    for d in done:
+    for d in pending:
         it = await d
         if it:
             items[it['url']] = it

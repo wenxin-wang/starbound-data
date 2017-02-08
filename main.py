@@ -2,23 +2,24 @@ import asyncio as aio
 import aiohttp
 import json
 import wiki
+import table
 
 
 async def main(loop):
-    async with aiohttp.ClientSession(loop=loop) as session:
-        #return await wiki.get_crops_time(session)
-        #return await wiki.get_item(session, '/Cotton')
-        #return await wiki.get_item(session, '/Bolt_O\'s')
-        #return await wiki.get_items_in_category(session, 'Food')
-
-        #return await wiki.get_redirect(session, '/Cotton')
-        #return await wiki.gen_food_data(session)
-        return await wiki.get_items_all_categories(session, wiki.food_categories)
+    async with aiohttp.ClientSession(loop=loop,
+                                     connector=aiohttp.TCPConnector(limit=100)) as session:
+        food, crafts = await aio.gather(
+            wiki.get_items_all_categories(session, wiki.food_categories),
+            wiki.get_items_all_categories(session, wiki.crafts_categories)
+        )
+    with open('food.json', 'w') as fd:
+        json.dump(food, fd)
+    with open('crafts.json', 'w') as fd:
+        json.dump(crafts, fd)
+    table.components_csv('food.csv', food)
+    table.components_csv('crafts.csv', crafts)
 
 
 if __name__ == '__main__':
     loop = aio.get_event_loop()
-    food = loop.run_until_complete(main(loop))
-    with open('food.json', 'w') as fd:
-        json.dump(food, fd)
-    print(food)
+    loop.run_until_complete(main(loop))
