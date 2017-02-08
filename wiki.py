@@ -13,23 +13,38 @@ crops_page = '/Crops'
 category = '/Category:'
 category_food = category + 'Food'
 food_categories = ['Food', 'Prepared_Food', 'Drink', 'Cooking Ingredient']
+ignore_categories = ['Removed', 'Disabled']
 
 redirected = {}
 
 
-def get_real_url(content, u):
-    parse_only = SoupStrainer(id='ca-nstab-main')
-    soup = BeautifulSoup(content, 'html.parser',
-                         parse_only=parse_only)
-    _u = unquote(soup.find('a')['href'])
+def get_real_url(soup, u):
+    _u = unquote(soup.find(id='ca-nstab-main').find('a')['href'])
     if u != _u:
         redirected[u] = _u
         return _u
 
 
-async def get_content(session, url):
+def should_ignore(soup):
+    ul = soup.find(id='mw-normal-catlinks').ul
+    for li in ul.find_all('li', recursive=False):
+        if li.a.string.strip() in ignore_categories:
+            return True
+    return False
+
+
+async def get_soup(session, url, parse_only=None):
     async with session.get(URL(base + quote(url), encoded=True)) as res:
-        return await res.text()
+        content = await res.text()
+    return BeautifulSoup(content, 'html.parser',
+                         parse_only=parse_only)
+
+
+async def url_soup(session, url, parse_only=None):
+    url = unquote(url)
+    soup = await get_soup(session, url, parse_only)
+    print("GET %s" % url)
+    return soup, get_real_url(soup, url) or url
 
 
 async def get_redirect(session, url):
@@ -37,25 +52,18 @@ async def get_redirect(session, url):
     u = redirected.get(url)
     if u:
         return u
-    content = await get_content(session, url)
+    parse_only = SoupStrainer(id='ca-nstab-main')
+    soup = await get_soup(session, url, parse_only)
     print("CHECK REDIRECT %s" % url)
     return get_real_url(content, url)
 
 
-async def url_soup(session, url, parse_only=None):
-    url = unquote(url)
-    content = await get_content(session, url)
-    print("GET %s" % url)
-    soup = BeautifulSoup(content, 'html.parser',
-                         parse_only=parse_only)
-    return soup, get_real_url(content, url) or url
-
-
 async def get_item(session, url):
-    parse_only = SoupStrainer('div', class_='infoboxwrapper')
-    soup, url = await url_soup(session, url, parse_only)
-    item = {'url': url}
-    pixel_a = soup.find('a', href='/Pixel')
+    soup, url = await url_soup(session, url)
+    if should_ignore(soup):
+        return
+    item = {'name': url[1:], 'url': url}
+    pixel_a = soup.find('div', class_='infoboxwrapper').find('a', href='/Pixel')
     item['price'] = int(pixel_a.next_sibling.string)
     ing_text_div = soup.find('div', text='INGREDIENTS')
     if ing_text_div:
@@ -95,7 +103,8 @@ async def get_items_in_category(session, category):
     items = {}
     for d in done:
         it = await d
-        items[it['url']] = it
+        if it:
+            items[it['url']] = it
     return items
 
 
@@ -113,8 +122,7 @@ async def get_crops_time(session, url=crops_page):
     This is currently unused
     '''
     harvest_re = re.compile(r"^\s*Harvest:\s*([0-9]+)\s*minutes\s*", re.I)
-    parse_only = SoupStrainer(id='mw-content-text')
-    soup, _ = await url_soup(session, url, parse_only)
+    soup, _ = await url_soup(session, url)
     tag = soup.find(id='Crop_Images_and_Average_Growth_Times')
     while tag.name != 'table':
         tag = tag.next_element
