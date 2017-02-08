@@ -54,7 +54,7 @@ async def url_soup(session, url, parse_only=None):
 async def get_item(session, url):
     parse_only = SoupStrainer('div', class_='infoboxwrapper')
     soup, url = await url_soup(session, url, parse_only)
-    item = {'name': url[1:], 'url': url}
+    item = {'url': url}
     pixel_a = soup.find('a', href='/Pixel')
     item['price'] = int(pixel_a.next_sibling.string)
     ing_text_div = soup.find('div', text='INGREDIENTS')
@@ -70,7 +70,7 @@ async def get_item(session, url):
     return item
 
 
-async def get_category_members(session, category, limit=50):
+async def get_category_items(session, category, limit=50):
     params = {'action': 'query', 'list': 'categorymembers', 'continue': '',
               'format': 'json', 'cmprop': 'title', 'cmlimit': str(limit), 'cmtitle':
               'Category:' + category}
@@ -80,14 +80,38 @@ async def get_category_members(session, category, limit=50):
             print("LIST %s" % category)
             for member in data['query']['categorymembers']:
                 title = member['title']
-                yield title, '/' + title.replace(' ', '_')
+                yield '/' + title.replace(' ', '_')
             cont = data.get('continue')
             if not cont:
                 break
             params['cmcontinue'] = cont['cmcontinue']
 
 
+async def get_items_in_category(session, category):
+    pending = []
+    async for url in get_category_items(session, category):
+        pending.append(aio.ensure_future(get_item(session, url)))
+    done, _ = await aio.wait(pending, loop=session.loop)
+    items = {}
+    for d in done:
+        it = await d
+        items[it['url']] = it
+    return items
+
+
+async def get_items_all_categories(session, categories):
+    done, _ = await aio.wait([(get_items_in_category(session, c)) for c in
+                              categories], loop=session.loop)
+    res = {}
+    for d in done:
+        res.update(await d)
+    return res
+
+
 async def get_crops_time(session, url=crops_page):
+    '''
+    This is currently unused
+    '''
     harvest_re = re.compile(r"^\s*Harvest:\s*([0-9]+)\s*minutes\s*", re.I)
     parse_only = SoupStrainer(id='mw-content-text')
     soup, _ = await url_soup(session, url, parse_only)
@@ -102,31 +126,10 @@ async def get_crops_time(session, url=crops_page):
     return times
 
 
-async def get_food_in_category(session, category):
-    pending = []
-    async for name, url in get_category_members(session, category):
-        pending.append(aio.ensure_future(get_item(session, url)))
-    done, _ = await aio.wait(pending, loop=session.loop)
-    food = {}
-    for d in done:
-        f = await d
-        food[f['url']] = f
-    return food
-
-
-async def get_food_all_categories(session, categories=food_categories):
-    done, _ = await aio.wait([(get_food_in_category(session, c)) for c in
-                              categories], loop=session.loop)
-    res = {}
-    for d in done:
-        res.update(await d)
-    return res
-
-
 async def gen_food_data(session):
     '''
+    This is currently unused
     Get a list of all kind of food
-    Get harvest time for crops
     Try to get simple ingredients since ingredients may be compound
     Return a dictionary from food url to food dictionary
     '''
