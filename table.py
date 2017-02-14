@@ -3,7 +3,7 @@ from csv import DictWriter
 from collections import defaultdict
 import wiki
 
-SELL_RATIO = 0.4
+SELL_RATIO = 1
 
 
 async def process_item(session, url):
